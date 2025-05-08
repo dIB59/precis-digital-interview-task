@@ -34,10 +34,18 @@ fn generate_event() -> Event {
 }
 
 fn main() {
+    let events_per_batch = 5; // You can change this number
+
     loop {
-        let event = generate_event();
-        let json = serde_json::to_string(&event).unwrap();
-        println!("{}", json);
-        thread::sleep(Duration::from_secs(1)); // Simulate real-time event generation
+        let mut batch = Vec::with_capacity(events_per_batch);
+
+        for _ in 0..events_per_batch {
+            batch.push(generate_event());
+        }
+
+        let json_batch = serde_json::to_string_pretty(&batch).unwrap();
+        println!("{}", json_batch);
+
+        thread::sleep(Duration::from_millis(20)); // Delay between batches
     }
 }
