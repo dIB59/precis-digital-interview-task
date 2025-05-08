@@ -1,11 +1,10 @@
+use std::env;
+
 use chrono::Utc;
 use rand::Rng;
 use serde::Serialize;
-use serde_json;
 use google_cloud_pubsub::client::{Client, ClientConfig};
 use google_cloud_googleapis::pubsub::v1::PubsubMessage;
-use google_cloud_gax::grpc::Status;
-use std::sync::Arc;
 
 #[derive(Serialize)]
 struct Event {
@@ -37,26 +36,29 @@ fn generate_event() -> Event {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Status> {
-    // 🔧 Hardcoded config for local emulator
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+   unsafe { env::set_var("PUBSUB_EMULATOR_HOST", "localhost:8085");}
+    // 🧪 Use the emulator endpoint
     let config = ClientConfig {
         endpoint: "http://localhost:8085".to_string(),
         project_id: Some("local-project".to_string()),
         ..Default::default()
     };
 
-    let client = Client::new(config).await.unwrap();
+    // ✅ Use default auth (will be ignored for emulator)
+    let client = Client::new(config).await?;
+
     let topic = client.topic("events-topic");
 
     if !topic.exists(None).await? {
         topic.create(None, None).await?;
     }
 
-    let publisher = topic.new_publisher(None);
+    let mut publisher = topic.new_publisher(None);
 
     for _ in 0..5 {
         let event = generate_event();
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event)?;
 
         let msg = PubsubMessage {
             data: json.into_bytes(),
@@ -64,12 +66,12 @@ async fn main() -> Result<(), Status> {
             ..Default::default()
         };
 
-        let mut awaiter = publisher.publish(msg).await;
+        let awaiter = publisher.publish(msg).await;
         let message_id = awaiter.get().await?;
-        println!("Published message with ID: {}", message_id);
+        println!("✅ Published message with ID: {}", message_id);
     }
 
-    publisher.shutdown();
+    publisher.shutdown().await;
 
     Ok(())
 }
