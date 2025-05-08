@@ -1,8 +1,11 @@
 use chrono::Utc;
 use rand::Rng;
 use serde::Serialize;
-use std::thread;
-use std::time::Duration;
+use serde_json;
+use google_cloud_pubsub::client::{Client, ClientConfig};
+use google_cloud_googleapis::pubsub::v1::PubsubMessage;
+use google_cloud_gax::grpc::Status;
+use std::sync::Arc;
 
 #[derive(Serialize)]
 struct Event {
@@ -33,19 +36,40 @@ fn generate_event() -> Event {
     }
 }
 
-fn main() {
-    let events_per_batch = 5; // You can change this number
+#[tokio::main]
+async fn main() -> Result<(), Status> {
+    // 🔧 Hardcoded config for local emulator
+    let config = ClientConfig {
+        endpoint: "http://localhost:8085".to_string(),
+        project_id: Some("local-project".to_string()),
+        ..Default::default()
+    };
 
-    loop {
-        let mut batch = Vec::with_capacity(events_per_batch);
+    let client = Client::new(config).await.unwrap();
+    let topic = client.topic("events-topic");
 
-        for _ in 0..events_per_batch {
-            batch.push(generate_event());
-        }
-
-        let json_batch = serde_json::to_string_pretty(&batch).unwrap();
-        println!("{}", json_batch);
-
-        thread::sleep(Duration::from_millis(20)); // Delay between batches
+    if !topic.exists(None).await? {
+        topic.create(None, None).await?;
     }
+
+    let publisher = topic.new_publisher(None);
+
+    for _ in 0..5 {
+        let event = generate_event();
+        let json = serde_json::to_string(&event).unwrap();
+
+        let msg = PubsubMessage {
+            data: json.into_bytes(),
+            ordering_key: "".to_string(),
+            ..Default::default()
+        };
+
+        let mut awaiter = publisher.publish(msg).await;
+        let message_id = awaiter.get().await?;
+        println!("Published message with ID: {}", message_id);
+    }
+
+    publisher.shutdown();
+
+    Ok(())
 }
