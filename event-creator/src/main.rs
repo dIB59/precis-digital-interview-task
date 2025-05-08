@@ -37,17 +37,14 @@ fn generate_event() -> Event {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-   unsafe { env::set_var("PUBSUB_EMULATOR_HOST", "localhost:8085");}
-    // 🧪 Use the emulator endpoint
+    unsafe { env::set_var("PUBSUB_EMULATOR_HOST", "localhost:8085"); }
     let config = ClientConfig {
         endpoint: "http://localhost:8085".to_string(),
         project_id: Some("local-project".to_string()),
         ..Default::default()
     };
 
-    // ✅ Use default auth (will be ignored for emulator)
     let client = Client::new(config).await?;
-
     let topic = client.topic("events-topic");
 
     if !topic.exists(None).await? {
@@ -55,21 +52,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut publisher = topic.new_publisher(None);
+    let num_messages = 100_000; // Or even higher
 
-    for _ in 0..5 {
+    let mut handles = Vec::new();
+    for _ in 0..num_messages {
+        let publisher_clone = publisher.clone(); // Clone the publisher for each task
         let event = generate_event();
-        let json = serde_json::to_string(&event)?;
 
-        let msg = PubsubMessage {
-            data: json.into_bytes(),
-            ordering_key: "".to_string(),
-            ..Default::default()
-        };
+        let handle = tokio::spawn(async move {
+            let json = match serde_json::to_string(&event) {
+                Ok(j) => j,
+                Err(e) => {
+                    eprintln!("Error serializing event: {}", e);
+                    return; // Skip this message
+                }
+            };
 
-        let awaiter = publisher.publish(msg).await;
-        let message_id = awaiter.get().await?;
-        println!("✅ Published message with ID: {}", message_id);
+            let msg = PubsubMessage {
+                data: json.into_bytes(),
+                ordering_key: "".to_string(),
+                ..Default::default()
+            };
+
+            let awaiter = publisher_clone.publish(msg).await;
+            match awaiter.get().await {
+                Ok(message_id) => {
+                    println!("✅ Published message with ID: {}", message_id);
+                }
+                Err(e) => {
+                    eprintln!("❌ Error publishing message: {}", e);
+                }
+            }
+        });
+        handles.push(handle);
     }
+
+    // Wait for all publish tasks to complete
+    futures::future::join_all(handles).await;
 
     publisher.shutdown().await;
 
